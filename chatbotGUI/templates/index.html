@@ -1,0 +1,222 @@
+<!-- UI를 위한 HTML파일 -->
+
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chatbot</title>
+    <style>
+        body,
+        html {
+            height: 100%;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background-color: #f4f4f4;
+            font-family: Arial, sans-serif;
+        }
+
+        #chat-container {
+            width: 100%;
+            max-width: 1200px;
+            height: 70%;
+            max-height: 700px;
+            min-width: 600px;
+            min-height: 400px;
+            background-color: #f5f5f5;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            margin: auto;
+        }
+
+        #message-container {
+            flex: 1;
+            padding: 10px;
+            overflow-y: auto;
+        }
+
+        .message {
+            display: flex;
+            margin-bottom: 10px;
+        }
+
+        .message.user .bubble {
+            margin-left: auto;
+            background-color: #007bff;
+            color: white;
+            word-wrap: break-word;
+            white-space: pre-wrap;
+        }
+
+        .message.bot .bubble {
+            margin-right: auto;
+            background-color: #e0e0e0;
+            color: black;
+            word-wrap: break-word;
+            white-space: pre-wrap;
+        }
+
+        .bubble {
+            max-width: 70%;
+            padding: 10px;
+            border-radius: 10px;
+            white-space: pre-wrap;
+        }
+
+        #input-container {
+            display: flex;
+            padding: 10px;
+            border-top: 1px solid #ccc;
+        }
+
+        #chat-input {
+            flex: 1;
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+        }
+
+        #send-button {
+            margin-left: 10px;
+            padding: 10px 20px;
+            border-radius: 5px;
+            border: none;
+            background-color: #007bff;
+            color: white;
+            cursor: pointer;
+        }
+
+        #send-button:hover {
+            background-color: #0056b3;
+        }
+
+        #notice-container {
+            padding: 10px;
+            background-color: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeeba;
+            border-radius: 8px;
+            margin-top: 10px;
+            /* 위쪽 여백 */
+            font-size: 14px;
+            line-height: 1.5;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="chat-container">
+        <div id="message-container"></div>
+        <div id="input-container">
+            <input type="text" id="chat-input" placeholder="Type a message..." autofocus>
+            <button id="send-button">Send</button>
+        </div>
+        <div id="notice-container">
+            <p>
+                <strong>사용 전 주의사항</strong><br>
+                1. 본 모델은 영어 정비 PDF를 한글로 번역한 자료를 기반으로 답변을 제공하기 때문에 다소 어색한 표현이 있을 수 있습니다.<br>
+                2. 기밀 데이터의 특성상 일부 내용이 검열되어 정보 제공에 제한이 있을 수 있습니다.<br>
+                3. 현재 버전에서는 정비 데이터 내의 표와 그림을 활용할 수 없습니다.<br>
+                4. 질문 시 구체적인 용어나 절차를 포함해 주시면 보다 정확한 답변을 드릴 수 있습니다.<br>
+                5. 정비 가이드의 범위를 벗어난 질문에 대해서는 정확한 답변이 어려울 수 있습니다.
+            </p>
+        </div>
+    </div>
+
+    <script>
+        function addMessage(message, isUser) {
+            const messageContainer = document.getElementById('message-container');
+            const messageDiv = document.createElement('div');
+            messageDiv.classList.add('message', isUser ? 'user' : 'bot');
+
+            const bubbleDiv = document.createElement('div');
+            bubbleDiv.classList.add('bubble');
+            bubbleDiv.textContent = message;
+
+            messageDiv.appendChild(bubbleDiv);
+            messageContainer.appendChild(messageDiv);
+            messageContainer.scrollTop = messageContainer.scrollHeight;
+            return bubbleDiv;
+        }
+
+        document.getElementById('send-button').addEventListener('click', function () {
+            const input = document.getElementById('chat-input');
+            const message = input.value;
+            if (message.trim()) {
+                addMessage(message, true);
+                input.value = '';
+
+                fetch('/chat_response_post/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    },
+                    body: JSON.stringify({ message: message })
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        const responseId = data.response_id;
+                        const source = new EventSource('/chat_response_stream/?response_id=' + responseId);
+
+                        let botBubble = null;
+                        let charQueue = [];
+                        let printingInterval = null;
+
+                        source.onmessage = function (event) {
+                            if (event.data === '__end__') {
+                                source.close();
+                                return;
+                            }
+
+                            if (!botBubble) {
+                                botBubble = addMessage('', false);
+                                botBubble.innerHTML = "";
+                            }
+
+                            charQueue.push(event.data);
+
+                            if (!printingInterval) {
+                                printingInterval = setInterval(() => {
+                                    if (charQueue.length > 0) {
+                                        let char = charQueue.shift();
+                                        const escapedChar = char
+                                            .replace(/⁂/g, "<br>");
+                                        botBubble.innerHTML += escapedChar;
+
+                                        const messageContainer = document.getElementById('message-container');
+                                        messageContainer.scrollTop = messageContainer.scrollHeight;
+                                    } else {
+                                        clearInterval(printingInterval);
+                                        printingInterval = null;
+                                    }
+                                }, 30);
+                            }
+                        };
+
+                        source.onerror = function () {
+                            console.error("EventSource connection error.");
+                        };
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                    });
+            }
+        });
+
+        document.getElementById('chat-input').addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                document.getElementById('send-button').click();
+            }
+        });
+    </script>
+</body>
+
+</html>
